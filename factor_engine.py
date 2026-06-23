@@ -52,7 +52,7 @@ def load_current_nifty50_universe() -> list[str]:
         "HINDALCO.NS", "GRASIM.NS", "BRITANNIA.NS", "BPCL.NS", "DRREDDY.NS", "CIPLA.NS",
         "EICHERMOT.NS", "JSWSTEEL.NS", "NESTLEIND.NS", "TECHM.NS", "WIPRO.NS", "APOLLOHOSP.NS",
         "TATACONSUM.NS", "SHRIRAMFIN.NS", "BAJAJFINSV.NS", "BEL.NS", "TRENT.NS", "HAL.NS",
-        "ONGC.NS", "DIVISLAB.NS",
+        "ONGC.NS", "DIVISLAB.NS","KOTAKBANK.NS",
     ]
 
 
