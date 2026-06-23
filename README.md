@@ -6,6 +6,13 @@ Built with **Python**, **Streamlit**, **Plotly**, and **Statsmodels**, the appli
 
 ---
 
+## Links
+
+- 🚀 **Live App:** https://factor-analytics-terminal.streamlit.app
+- 💻 **GitHub Repository:** https://github.com/yourusername/factor-analytics-terminal
+
+---
+
 ## Features
 
 * Fama-French Three-Factor Model
