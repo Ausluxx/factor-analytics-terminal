@@ -8,8 +8,8 @@ Built with **Python**, **Streamlit**, **Plotly**, and **Statsmodels**, the appli
 
 ## Links
 
-- 🚀 **Live App:** https://factor-analytics-terminal-nse50.streamlit.app/
-- 💻 **GitHub Repository:** https://github.com/Ausluxx/factor-analytics-terminal
+- **Live App:** https://factor-analytics-terminal-nse50.streamlit.app/
+- **GitHub Repository:** https://github.com/Ausluxx/factor-analytics-terminal
 
 ---
 
