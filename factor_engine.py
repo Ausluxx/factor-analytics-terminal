@@ -179,11 +179,21 @@ def build_fama_french_factors(
             continue
         anchor_date = year_dates[0]
 
+        if "shares_outstanding" not in fundamentals_df.columns or "book_value_per_share" not in fundamentals_df.columns:
+            print(f"ERROR: Available columns are: {fundamentals_df.columns.tolist()}")
+            
+            shares_col = "shares_outstanding" if "shares_outstanding" in fundamentals_df.columns else "shares"
+            book_col = "book_value_per_share" if "book_value_per_share" in fundamentals_df.columns else "book_value"
+        else:
+            shares_col = "shares_outstanding"
+            book_col = "book_value_per_share"
+
         price_at_anchor = prices_df.loc[anchor_date, common_tickers]
-        shares = fundamentals_df.loc[common_tickers, "shares_outstanding"].astype(float)
+        
+        shares = fundamentals_df.loc[common_tickers, shares_col].astype(float)
         market_cap = price_at_anchor * shares
 
-        book_per_share = fundamentals_df.loc[common_tickers, "book_value_per_share"].astype(float)
+        book_per_share = fundamentals_df.loc[common_tickers, book_col].astype(float)
         book_to_market = book_per_share / price_at_anchor
 
         valid = market_cap.notna() & book_to_market.notna() & (price_at_anchor > 0)
