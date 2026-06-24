@@ -67,6 +67,12 @@ The application includes:
 
 <img width="1871" height="777" alt="image" src="https://github.com/user-attachments/assets/fe7aa67c-50ca-467a-afb6-1d602cfa6baa" />
 
+<img width="1800" height="802" alt="image" src="https://github.com/user-attachments/assets/d0f38ccb-a60d-4caa-bbce-31d62c043201" />
+
+<img width="1502" height="807" alt="image" src="https://github.com/user-attachments/assets/98b80ed9-1aa4-4659-bef2-e32b45882ca2" />
+
+<img width="1840" height="727" alt="image" src="https://github.com/user-attachments/assets/60d760e1-0d1d-4332-a6ec-ea38786f0e7d" />
+
 ---
 
 ## Installation
