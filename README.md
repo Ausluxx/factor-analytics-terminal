@@ -63,6 +63,10 @@ The application includes:
 * Rolling Beta Analysis
 * Diagnostics & Data Quality Report
 
+<img width="1847" height="646" alt="image" src="https://github.com/user-attachments/assets/f6bb154c-61e5-4137-b783-9fae0f9ab63b" />
+
+<img width="1871" height="777" alt="image" src="https://github.com/user-attachments/assets/fe7aa67c-50ca-467a-afb6-1d602cfa6baa" />
+
 ---
 
 ## Installation
