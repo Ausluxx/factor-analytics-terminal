@@ -291,7 +291,7 @@ else:
     factors, returns = build_fama_french_factors(raw_data, fundamentals, rf_series, diag)
 
     if factors.empty or returns.empty:
-        st.error("Factor construction produced no usable rows. Check the Diagnostics tab — likely cause is insufficient fundamentals coverage or too few names per annual basket.")
+        st.error("Factor construction produced no usable rows. Check the Diagnostics tab.")
         with st.expander("Diagnostics", expanded=True):
             st.dataframe(diag.as_dataframe(), use_container_width=True)
             for w in diag.warnings:
@@ -320,7 +320,7 @@ else:
     with m2:
         render_metric_card("2", "Mean Cross-Sectional R²", f"{sorted_matrix['R-Squared'].mean():.0%}", green=True)
     with m3:
-        render_metric_card("3", "Top Alpha", f"{sorted_matrix.index[0]}")
+        render_metric_card("3", "Top Alpha", f"{sorted_matrix.index[0].replace('.NS', '')}")
     with m4:
         n_issues = len(diag.dropped_tickers) + len(diag.warnings)
         render_metric_card("4", "Diagnostic Flags", f"{n_issues}", sub="dropped tickers + warnings", green=(n_issues == 0))
@@ -335,89 +335,150 @@ else:
     ])
 
     with tab_screener:
-        col_table, col_scatter = st.columns([1.3, 1], gap="medium")
 
-        with col_table:
-            st.markdown(
-                f"<div class='panel-title'>Universe Ranking &nbsp;"
-                f"<span style='color:#71717a;font-weight:500;font-size:0.85rem;'>Sorted by {sort_attribute} Z-Score</span></div>",
-                unsafe_allow_html=True
-            )
-            display_df = sorted_matrix.copy()
-            display_df["Alpha (Ann %)"] = display_df["Alpha (Ann %)"].map("{:+.2f}%".format)
-            display_df["Beta Market"] = display_df["Beta Market"].map("{:.3f}".format)
-            display_df["Beta Size (SMB)"] = display_df["Beta Size (SMB)"].map("{:+.3f}".format)
-            display_df["Beta Value (HML)"] = display_df["Beta Value (HML)"].map("{:+.3f}".format)
-            display_df["Volatility (Ann %, i.i.d.)"] = display_df["Volatility (Ann %, i.i.d.)"].map("{:.2f}%".format)
-            display_df["Volatility (Ann %, EWMA)"] = display_df["Volatility (Ann %, EWMA)"].map("{:.2f}%".format)
-            display_df["R-Squared"] = display_df["R-Squared"].map("{:.2%}".format)
-            display_df["Z_Score_Rank"] = display_df["Z_Score_Rank"].map("{:+.2f}".format)
-            display_df["t-stat Alpha"] = display_df["t-stat Alpha"].map("{:+.2f}".format)
-            display_df["N (obs)"] = display_df["N (obs)"].map("{:.0f}".format)
-            display_df["DoF"] = display_df["DoF"].map("{:.0f}".format)
-            display_df["HAC Lags"] = display_df["HAC Lags"].map("{:.0f}".format)
-            st.dataframe(display_df, use_container_width=True, height=480)
-            st.caption(
-                "EWMA volatility (λ=0.94) weights recent observations more heavily and responds "
-                "to volatility clustering; i.i.d. volatility is the flat full-window stdev × √252. "
-                "DoF = N − 4 (3 factors + intercept). HAC lags follow the Newey-West rule of thumb."
-            )
+        # ── Risk / Return scatter (full width) ────────────────────────────────
+        st.markdown("<div class='panel-title'>Risk / Return</div>", unsafe_allow_html=True)
 
-        with col_scatter:
-            st.markdown("<div class='panel-title'>Risk / Return</div>", unsafe_allow_html=True)
-            df_scatter = sorted_matrix.reset_index()
-            df_scatter["ticker_short"] = df_scatter["index"].str.replace(".NS", "", regex=False)
+        df_scatter = sorted_matrix.reset_index().copy()
+        df_scatter["Ticker"] = df_scatter["index"].str.replace(".NS", "", regex=False)
 
-            scatter_fig = px.scatter(
-                df_scatter,
-                x="Volatility (Ann %, EWMA)",
-                y="Alpha (Ann %)",
-                color="Z_Score_Rank",
-                hover_name="ticker_short",
-                hover_data={
-                    "Alpha (Ann %)": ":.1f",
-                    "Volatility (Ann %, EWMA)": ":.1f",
-                    "Z_Score_Rank": ":.2f",
-                    "index": False,
-            },
-            color_continuous_scale=["#38bdf8", "#1a1a22", ACCENT],
-            color_continuous_midpoint=0,
-            labels={
-                "Volatility (Ann %, EWMA)": "Volatility — Ann % (EWMA)",
-                "Alpha (Ann %)": "Alpha — Ann %",
-                "Z_Score_Rank": "Z-Score",
-            },
-        )
-        scatter_fig.update_traces(
-            marker=dict(size=13, line=dict(width=1.2, color="#0a0a0d")),
-            hovertemplate="<b>%{hovertext}</b><br>Alpha: %{y:.1f}%<br>Vol: %{x:.1f}%<extra></extra>",
-        )
-        # Zero-alpha reference line
+        scatter_fig = go.Figure()
+
+        scatter_fig.add_trace(go.Scatter(
+            x=df_scatter["Volatility (Ann %, EWMA)"],
+            y=df_scatter["Alpha (Ann %)"],
+            mode="markers",
+            marker=dict(
+                size=12,
+                color=df_scatter["Z_Score_Rank"],
+                colorscale=[[0.0, "#38bdf8"], [0.5, "#1a1a22"], [1.0, ACCENT]],
+                cmid=0,
+                cmin=float(df_scatter["Z_Score_Rank"].min()),
+                cmax=float(df_scatter["Z_Score_Rank"].max()),
+                line=dict(width=1, color="#0a0a0d"),
+                colorbar=dict(
+                    title=dict(text="Z-Score", font=dict(size=11, color="#9a9aa3")),
+                    thickness=10,
+                    len=0.65,
+                    tickfont=dict(size=10, color="#9a9aa3"),
+                    outlinewidth=0,
+                    bgcolor="rgba(0,0,0,0)",
+                ),
+                showscale=True,
+            ),
+            customdata=np.stack([
+                df_scatter["Ticker"],
+                df_scatter["Alpha (Ann %)"].round(1),
+                df_scatter["Volatility (Ann %, EWMA)"].round(1),
+                df_scatter["Z_Score_Rank"].round(2),
+                df_scatter["Beta Market"].round(2),
+                df_scatter["R-Squared"].round(3),
+            ], axis=-1),
+            hovertemplate=(
+                "<b>%{customdata[0]}</b><br>"
+                "Alpha: %{customdata[1]}%<br>"
+                "Vol (EWMA): %{customdata[2]}%<br>"
+                "Z-Score: %{customdata[3]}<br>"
+                "Mkt Beta: %{customdata[4]}<br>"
+                "R²: %{customdata[5]:.1%}"
+                "<extra></extra>"
+            ),
+        ))
+
         scatter_fig.add_hline(
             y=0,
             line_dash="dot",
-            line_color="rgba(255,255,255,0.15)",
-            line_width=1.2,
+            line_color="rgba(255,255,255,0.12)",
+            line_width=1,
         )
-        style_plotly_dark(scatter_fig)
+
         scatter_fig.update_layout(
-            coloraxis_colorbar=dict(
-                title="Z-Score",
-                thickness=12,
-                len=0.6,
-                tickfont=dict(size=10),
+            template="plotly_dark",
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(family="Inter, sans-serif", color="#d4d4d8", size=12),
+            height=360,
+            margin=dict(l=55, r=80, t=20, b=50),
+            xaxis=dict(
+                title=dict(text="Volatility — Ann % (EWMA)", font=dict(size=11, color="#9a9aa3")),
+                gridcolor="rgba(255,255,255,0.04)",
+                gridwidth=0.5,
+                zeroline=False,
+                tickfont=dict(size=10, color="#9a9aa3"),
             ),
-            xaxis=dict(gridcolor="rgba(255,255,255,0.05)", gridwidth=0.5),
-            yaxis=dict(gridcolor="rgba(255,255,255,0.05)", gridwidth=0.5),
+            yaxis=dict(
+                title=dict(text="Alpha — Ann %", font=dict(size=11, color="#9a9aa3")),
+                gridcolor="rgba(255,255,255,0.04)",
+                gridwidth=0.5,
+                zeroline=False,
+                tickfont=dict(size=10, color="#9a9aa3"),
+            ),
+            hoverlabel=dict(
+                bgcolor="#1c1c22",
+                bordercolor="#3a3a42",
+                font=dict(size=12, color="#f5f5f7"),
+            ),
         )
+
         st.plotly_chart(scatter_fig, use_container_width=True)
+
+        st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
+
+        # ── Universe Ranking table (full width below scatter) ─────────────────
+        st.markdown(
+            f"<div class='panel-title'>Universe Ranking &nbsp;"
+            f"<span style='color:#71717a;font-weight:500;font-size:0.85rem;'>Sorted by {sort_attribute} Z-Score</span></div>",
+            unsafe_allow_html=True
+        )
+
+        display_df = sorted_matrix.copy()
+        display_df.index = display_df.index.str.replace(".NS", "", regex=False)
+
+        display_df["Alpha (Ann %)"]             = display_df["Alpha (Ann %)"].map("{:+.2f}%".format)
+        display_df["Beta Market"]               = display_df["Beta Market"].map("{:.3f}".format)
+        display_df["Beta Size (SMB)"]           = display_df["Beta Size (SMB)"].map("{:+.3f}".format)
+        display_df["Beta Value (HML)"]          = display_df["Beta Value (HML)"].map("{:+.3f}".format)
+        display_df["Volatility (Ann %, i.i.d.)"]= display_df["Volatility (Ann %, i.i.d.)"].map("{:.2f}%".format)
+        display_df["Volatility (Ann %, EWMA)"]  = display_df["Volatility (Ann %, EWMA)"].map("{:.2f}%".format)
+        display_df["R-Squared"]                 = display_df["R-Squared"].map("{:.2%}".format)
+        display_df["Z_Score_Rank"]              = display_df["Z_Score_Rank"].map("{:+.2f}".format)
+        display_df["t-stat Alpha"]              = display_df["t-stat Alpha"].map("{:+.2f}".format)
+        display_df["N (obs)"]                   = display_df["N (obs)"].map("{:.0f}".format)
+        display_df["DoF"]                       = display_df["DoF"].map("{:.0f}".format)
+        display_df["HAC Lags"]                  = display_df["HAC Lags"].map("{:.0f}".format)
+
+        display_df = display_df.rename(columns={
+            "Alpha (Ann %)":             "Alpha",
+            "Beta Market":               "β Mkt",
+            "Beta Size (SMB)":           "β SMB",
+            "Beta Value (HML)":          "β HML",
+            "t-stat Alpha":              "t-stat α",
+            "R-Squared":                 "R²",
+            "Volatility (Ann %, i.i.d.)":"Vol i.i.d.",
+            "Volatility (Ann %, EWMA)":  "Vol EWMA",
+            "Z_Score_Rank":              "Z-Score",
+            "N (obs)":                   "N",
+        })
+
+        st.dataframe(display_df, use_container_width=True, height=540)
+        st.caption(
+            "Vol EWMA (λ=0.94) weights recent observations more heavily; Vol i.i.d. is flat full-window stdev × √252. "
+            "DoF = N − 4 (3 factors + intercept). HAC lags follow the Newey-West rule of thumb. "
+            "Hover on scatter points above for full per-stock detail."
+        )
 
     with tab_heatmap:
         st.markdown("<div class='panel-title'>Factor Loadings Heatmap</div>", unsafe_allow_html=True)
-        st.markdown("<span style='color:#9a9aa3;'>Systematic factor exposures across the universe — reveals size and value clustering at a glance.</span>", unsafe_allow_html=True)
+        st.markdown(
+            "<span style='color:#9a9aa3;'>Systematic factor exposures across the universe — reveals size and value clustering at a glance.</span>",
+            unsafe_allow_html=True
+        )
+
+        heatmap_data = sorted_matrix[["Beta Market", "Beta Size (SMB)", "Beta Value (HML)"]].copy()
+        heatmap_data.index = heatmap_data.index.str.replace(".NS", "", regex=False)
 
         heatmap_fig = px.imshow(
-            sorted_matrix[["Beta Market", "Beta Size (SMB)", "Beta Value (HML)"]],
+            heatmap_data,
             labels=dict(x="Factor", y="Ticker", color="Beta"),
             color_continuous_scale=["#38bdf8", "#14141a", ACCENT],
             color_continuous_midpoint=0,
@@ -428,7 +489,6 @@ else:
 
     with tab_decomposition:
         col_ui, col_chart = st.columns([1, 2.2], gap="large")
-
         available_assets = sorted(sorted_matrix.index)
 
         with col_ui:
@@ -456,13 +516,14 @@ else:
             st.markdown('</div>', unsafe_allow_html=True)
 
         with col_chart:
-            rolling_window = min(60, max(10, asset_stats['N (obs)'] // 3))
+            rolling_window = min(60, max(10, int(asset_stats['N (obs)']) // 3))
             if asset_stats['N (obs)'] < rolling_window + 10:
                 st.warning(f"Insufficient history for rolling analysis ({asset_stats['N (obs)']:.0f} observations available).")
             else:
                 with st.spinner("Computing rolling regressions..."):
-                    rolling_df = calculate_rolling_exposures(returns[selected_asset], factors, window=int(rolling_window))
-
+                    rolling_df = calculate_rolling_exposures(
+                        returns[selected_asset], factors, window=int(rolling_window)
+                    )
                     if rolling_df.empty:
                         st.info("Rolling exposures could not be computed for this asset and window.")
                     else:
@@ -472,16 +533,16 @@ else:
                             y=["Market Factor", "Size Factor (SMB)", "Value Factor (HML)"],
                             labels={"value": "Beta", "variable": "Factor"},
                             color_discrete_map={
-                                "Market Factor": "#38bdf8",
+                                "Market Factor":     "#38bdf8",
                                 "Size Factor (SMB)": GREEN,
-                                "Value Factor (HML)": ACCENT
+                                "Value Factor (HML)":ACCENT,
                             }
                         )
                         style_plotly_dark(roll_fig)
                         roll_fig.update_layout(
                             title=f"{int(rolling_window)}-Day Rolling Betas: {selected_asset.replace('.NS', '')}",
                             hovermode="x unified",
-                            legend=dict(orientation="h", yref="container", y=1.05, x=0.01)
+                            legend=dict(orientation="h", yref="container", y=1.05, x=0.01),
                         )
                         st.plotly_chart(roll_fig, use_container_width=True)
 
