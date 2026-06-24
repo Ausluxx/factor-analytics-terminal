@@ -365,19 +365,52 @@ else:
 
         with col_scatter:
             st.markdown("<div class='panel-title'>Risk / Return</div>", unsafe_allow_html=True)
+            df_scatter = sorted_matrix.reset_index()
+            df_scatter["ticker_short"] = df_scatter["index"].str.replace(".NS", "", regex=False)
+
             scatter_fig = px.scatter(
-                sorted_matrix.reset_index(),
+                df_scatter,
                 x="Volatility (Ann %, EWMA)",
                 y="Alpha (Ann %)",
                 color="Z_Score_Rank",
-                text="index",
-                labels={"index": "Ticker"},
-                color_continuous_scale=["#38bdf8", "#1a1a22", ACCENT],
-                color_continuous_midpoint=0
-            )
-            scatter_fig.update_traces(textposition='top center', marker=dict(size=11, line=dict(width=1, color='#0a0a0d')))
-            style_plotly_dark(scatter_fig)
-            st.plotly_chart(scatter_fig, use_container_width=True)
+                hover_name="ticker_short",
+                hover_data={
+                    "Alpha (Ann %)": ":.1f",
+                    "Volatility (Ann %, EWMA)": ":.1f",
+                    "Z_Score_Rank": ":.2f",
+                    "index": False,
+            },
+            color_continuous_scale=["#38bdf8", "#1a1a22", ACCENT],
+            color_continuous_midpoint=0,
+            labels={
+                "Volatility (Ann %, EWMA)": "Volatility — Ann % (EWMA)",
+                "Alpha (Ann %)": "Alpha — Ann %",
+                "Z_Score_Rank": "Z-Score",
+            },
+        )
+        scatter_fig.update_traces(
+            marker=dict(size=13, line=dict(width=1.2, color="#0a0a0d")),
+            hovertemplate="<b>%{hovertext}</b><br>Alpha: %{y:.1f}%<br>Vol: %{x:.1f}%<extra></extra>",
+        )
+        # Zero-alpha reference line
+        scatter_fig.add_hline(
+            y=0,
+            line_dash="dot",
+            line_color="rgba(255,255,255,0.15)",
+            line_width=1.2,
+        )
+        style_plotly_dark(scatter_fig)
+        scatter_fig.update_layout(
+            coloraxis_colorbar=dict(
+                title="Z-Score",
+                thickness=12,
+                len=0.6,
+                tickfont=dict(size=10),
+            ),
+            xaxis=dict(gridcolor="rgba(255,255,255,0.05)", gridwidth=0.5),
+            yaxis=dict(gridcolor="rgba(255,255,255,0.05)", gridwidth=0.5),
+        )
+        st.plotly_chart(scatter_fig, use_container_width=True)
 
     with tab_heatmap:
         st.markdown("<div class='panel-title'>Factor Loadings Heatmap</div>", unsafe_allow_html=True)
