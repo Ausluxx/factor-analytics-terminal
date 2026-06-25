@@ -52,7 +52,7 @@ def load_current_nifty50_universe() -> list[str]:
         "HINDALCO.NS", "GRASIM.NS", "BRITANNIA.NS", "BPCL.NS", "DRREDDY.NS", "CIPLA.NS",
         "EICHERMOT.NS", "JSWSTEEL.NS", "NESTLEIND.NS", "TECHM.NS", "WIPRO.NS", "APOLLOHOSP.NS",
         "TATACONSUM.NS", "SHRIRAMFIN.NS", "BAJAJFINSV.NS", "BEL.NS", "TRENT.NS", "HAL.NS",
-        "ONGC.NS", "DIVISLAB.NS","KOTAKBANK.NS",
+        "ONGC.NS", "DIVISLAB.NS", "KOTAKBANK.NS",
     ]
 
 
@@ -96,7 +96,7 @@ def fetch_terminal_data(
         if t == BENCHMARK_MKT:
             continue
         if expected_days > 0 and missing / expected_days > 0.10:
-            diag.drop(t, f"{missing}/{expected_days} trading days missing (>10% gap) — excluded to avoid distorting size/value baskets and volatility.")
+            diag.drop(t, f"{missing}/{expected_days} trading days missing (>10% gap).")
             prices = prices.drop(columns=[t])
 
     return prices
@@ -112,9 +112,9 @@ def fetch_fundamentals(tickers: list[str], diag: Diagnostics) -> pd.DataFrame:
             shares = info.get("sharesOutstanding")
             book_value_per_share = info.get("bookValue")
             if shares is None or book_value_per_share is None or book_value_per_share <= 0:
-                diag.drop(t, "Missing shares outstanding or book value per share from data provider — cannot compute market cap or book-to-market.")
+                diag.drop(t, "Missing shares outstanding or book value per share — cannot compute market cap or book-to-market.")
                 continue
-            records[t] = {"shares_outstanding": shares, "book_value_per_share": book_value_per_share}
+            records[t] = {"shares_outstanding": float(shares), "book_value_per_share": float(book_value_per_share)}
         except (KeyError, ValueError) as e:
             diag.drop(t, f"Malformed fundamentals payload: {e}")
         except Exception as e:
@@ -122,9 +122,13 @@ def fetch_fundamentals(tickers: list[str], diag: Diagnostics) -> pd.DataFrame:
 
     if not records:
         diag.warn("No usable fundamentals retrieved for any ticker — SMB/HML cannot be constructed.")
-    if not records:
         return pd.DataFrame(columns=["shares_outstanding", "book_value_per_share"])
-    return pd.DataFrame.from_dict(records, orient="index")
+
+    # from_dict with orient="index" preserves column names across all pandas versions
+    df = pd.DataFrame.from_dict(records, orient="index")
+    df["shares_outstanding"] = df["shares_outstanding"].astype(float)
+    df["book_value_per_share"] = df["book_value_per_share"].astype(float)
+    return df
 
 
 def fetch_risk_free_series(
@@ -136,8 +140,7 @@ def fetch_risk_free_series(
 
     diag.note(
         f"Risk-free rate held constant at {manual_annual_rate:.3%} (annualized) across the "
-        "full window — no free, reliable historical Indian T-Bill series was available. "
-        "Supply a real historical series here if available."
+        "full window — no free, reliable historical Indian T-Bill series was available."
     )
     daily_rate = manual_annual_rate / TRADING_DAYS_PER_YEAR
     return pd.Series(daily_rate, index=index, name="RF")
@@ -158,16 +161,16 @@ def build_fama_french_factors(
         common_tickers = []
     else:
         common_tickers = [t for t in stock_cols if t in fundamentals_df.index]
+
     missing_fundamentals = set(stock_cols) - set(common_tickers)
     for t in missing_fundamentals:
         diag.drop(
             t,
-            "No fundamentals available — excluded from SMB/HML basket construction. "
-            "Factor betas are still estimated against the resulting factors.",
+            "No fundamentals available — excluded from SMB/HML basket construction.",
         )
 
     if len(common_tickers) < 6:
-        diag.warn(f"Only {len(common_tickers)} tickers have usable fundamentals — SMB/HML may be unstable with this few names per basket.")
+        diag.warn(f"Only {len(common_tickers)} tickers have usable fundamentals — SMB/HML may be unstable.")
 
     factors = pd.DataFrame(index=returns.index)
     rf_aligned = rf_series.reindex(returns.index).ffill()
@@ -181,7 +184,7 @@ def build_fama_french_factors(
     for yr in sorted(set(years)):
         year_mask = years == yr
         year_dates = returns.index[year_mask]
-        if len(year_dates) == 0:
+        if len(year_dates) == 0 or len(common_tickers) == 0:
             continue
         anchor_date = year_dates[0]
 
@@ -197,7 +200,7 @@ def build_fama_french_factors(
         book_to_market = book_to_market[valid]
 
         if len(market_cap) < 6:
-            diag.warn(f"Year {yr}: fewer than 6 valid names for SMB/HML basket construction; factor values for this year may be noisy.")
+            diag.warn(f"Year {yr}: fewer than 6 valid names for SMB/HML basket construction.")
             continue
 
         size_median = market_cap.median()
@@ -266,35 +269,39 @@ def run_factor_regressions(returns_df: pd.DataFrame, factors_df: pd.DataFrame, d
             continue
 
         resid_returns = y.loc[common]
-        naive_vol = resid_returns.std(ddof=1) * np.sqrt(TRADING_DAYS_PER_YEAR) * 100
+        naive_vol = float(resid_returns.std(ddof=1)) * np.sqrt(TRADING_DAYS_PER_YEAR) * 100
         ewma_vol = _ewma_annualized_vol(resid_returns) * 100
 
         results[stock] = {
-            "Alpha (Ann %)": model.params["const"] * TRADING_DAYS_PER_YEAR * 100,
-            "Beta Market": model.params["MKT_RF"],
-            "Beta Size (SMB)": model.params["SMB"],
-            "Beta Value (HML)": model.params["HML"],
-            "t-stat Alpha": model.tvalues["const"],
-            "R-Squared": model.rsquared,
-            "Volatility (Ann %, i.i.d.)": naive_vol,
-            "Volatility (Ann %, EWMA)": ewma_vol,
-            "N (obs)": n_obs,
-            "DoF": n_obs - 4,
-            "HAC Lags": maxlags,
+            "Alpha (Ann %)":             float(model.params["const"]) * TRADING_DAYS_PER_YEAR * 100,
+            "Beta Market":               float(model.params["MKT_RF"]),
+            "Beta Size (SMB)":           float(model.params["SMB"]),
+            "Beta Value (HML)":          float(model.params["HML"]),
+            "t-stat Alpha":              float(model.tvalues["const"]),
+            "R-Squared":                 float(model.rsquared),
+            "Volatility (Ann %, i.i.d.)": float(naive_vol),
+            "Volatility (Ann %, EWMA)":  float(ewma_vol),
+            "N (obs)":                   int(n_obs),
+            "DoF":                       int(n_obs - 4),
+            "HAC Lags":                  int(maxlags),
         }
 
     if not results:
         diag.warn("No stock cleared the minimum-sample regression threshold — check date range and universe.")
-    return pd.DataFrame(results).T
+        return pd.DataFrame()
+
+    # Build from list of dicts — preserves dtypes on all pandas versions
+    df = pd.DataFrame.from_dict(results, orient="index")
+    return df
 
 
 def _ewma_annualized_vol(returns: pd.Series, lam: float = 0.94) -> float:
     r = returns.dropna().values
     if len(r) < 2:
         return float("nan")
-    var = r[0] ** 2
+    var = float(r[0]) ** 2
     for x in r[1:]:
-        var = lam * var + (1 - lam) * x ** 2
+        var = lam * var + (1 - lam) * float(x) ** 2
     return float(np.sqrt(var * TRADING_DAYS_PER_YEAR))
 
 
@@ -319,10 +326,11 @@ def calculate_rolling_exposures(
             continue
         records.append({
             "Date": y.index[i],
-            "Market Factor": model.params["MKT_RF"],
-            "Size Factor (SMB)": model.params["SMB"],
-            "Value Factor (HML)": model.params["HML"],
+            "Market Factor": float(model.params["MKT_RF"]),
+            "Size Factor (SMB)": float(model.params["SMB"]),
+            "Value Factor (HML)": float(model.params["HML"]),
         })
-    return pd.DataFrame(records).set_index("Date") if records else pd.DataFrame(
-        columns=["Market Factor", "Size Factor (SMB)", "Value Factor (HML)"]
-    )
+
+    if not records:
+        return pd.DataFrame(columns=["Market Factor", "Size Factor (SMB)", "Value Factor (HML)"])
+    return pd.DataFrame(records).set_index("Date")
