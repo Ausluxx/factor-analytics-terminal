@@ -351,10 +351,8 @@ else:
             marker=dict(
                 size=12,
                 color=df_scatter["Z_Score_Rank"],
-                colorscale=[[0.0, "#38bdf8"], [0.5, "#1a1a22"], [1.0, ACCENT]],
+                colorscale=[[0.0, "#38bdf8"], [0.5, "#94a3b8"], [1.0, ACCENT]],
                 cmid=0,
-                cmin=float(df_scatter["Z_Score_Rank"].min()),
-                cmax=float(df_scatter["Z_Score_Rank"].max()),
                 line=dict(width=1, color="#0a0a0d"),
                 colorbar=dict(
                     title=dict(text="Z-Score", font=dict(size=11, color="#9a9aa3")),
