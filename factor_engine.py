@@ -122,7 +122,9 @@ def fetch_fundamentals(tickers: list[str], diag: Diagnostics) -> pd.DataFrame:
 
     if not records:
         diag.warn("No usable fundamentals retrieved for any ticker — SMB/HML cannot be constructed.")
-    return pd.DataFrame(records).T
+    if not records:
+        return pd.DataFrame(columns=["shares_outstanding", "book_value_per_share"])
+    return pd.DataFrame.from_dict(records, orient="index")
 
 
 def fetch_risk_free_series(
@@ -151,7 +153,11 @@ def build_fama_french_factors(
     stock_cols = [c for c in returns.columns if c != BENCHMARK_MKT]
     returns = returns.dropna(subset=[BENCHMARK_MKT])
 
-    common_tickers = [t for t in stock_cols if t in fundamentals_df.index]
+    if fundamentals_df.empty:
+        diag.warn("Fundamentals DataFrame is empty — SMB/HML cannot be constructed. Check yfinance connectivity.")
+        common_tickers = []
+    else:
+        common_tickers = [t for t in stock_cols if t in fundamentals_df.index]
     missing_fundamentals = set(stock_cols) - set(common_tickers)
     for t in missing_fundamentals:
         diag.drop(
