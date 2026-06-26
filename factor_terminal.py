@@ -1,4 +1,4 @@
-import streamlit as st
+\import streamlit as st
 import pandas as pd
 import numpy as np
 import datetime
@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 st.set_page_config(
     page_title="Factor Analytics",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
 st.markdown("""
@@ -71,15 +71,21 @@ st.markdown("""
         background-color: #16161a; padding: 0.85rem 1rem; border-radius: 0.5rem;
         border-left: 3px solid #f87171; margin-bottom: 1rem; font-size: 0.88rem;
     }
-    div[data-testid="stMetricValue"] { font-size: 1.7rem !important; font-weight: 700 !important; color: #fca5a5 !important; }
-    div[data-testid="stMetricLabel"] > label { font-size: 0.78rem !important; text-transform: uppercase; letter-spacing: 0.05em; color: #9a9aa3 !important; }
+    div[data-testid="stMetricValue"] {
+        font-size: 1.7rem !important; font-weight: 700 !important; color: #fca5a5 !important;
+    }
+    div[data-testid="stMetricLabel"] > label {
+        font-size: 0.78rem !important; text-transform: uppercase;
+        letter-spacing: 0.05em; color: #9a9aa3 !important;
+    }
     div[data-testid="stDataFrame"] { border: 1px solid #1c1c22; border-radius: 0.6rem; }
     .footer-bar {
         margin-top: 1.4rem; padding: 0.7rem 1.1rem; background-color: #0e0e11;
         border: 1px solid #1c1c22; border-radius: 0.6rem; font-size: 0.78rem; color: #8b8b93;
-        display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.4rem;
+        display: flex; justify-content: space-between; align-items: center;
+        flex-wrap: wrap; gap: 0.4rem;
     }
-    .footer-bar .ok { color: #6ee7b7; font-weight: 600; }
+    .footer-bar .ok  { color: #6ee7b7; font-weight: 600; }
     .footer-bar .sep { color: #3a3a42; margin: 0 0.6rem; }
     section[data-testid="stSidebar"] { background-color: #0c0c0f; border-right: 1px solid #1c1c22; }
     </style>
@@ -99,24 +105,29 @@ from factor_engine import (
 
 ACCENT = "#f87171"
 GREEN  = "#6ee7b7"
-AMBER  = "#fbbf24"
 
 
+# ── Cached wrappers (tuples for hashable cache keys) ──────────────────────────
 @st.cache_data(show_spinner="Downloading historical price data...")
-def fetch_terminal_data_cached(tickers: list, start, end):
+def fetch_terminal_data_cached(tickers: tuple, start, end):
     local_diag = Diagnostics()
-    prices = _fetch_terminal_data(tickers, start, end, local_diag)
+    prices = _fetch_terminal_data(list(tickers), start, end, local_diag)
     return prices, local_diag.dropped_tickers, local_diag.data_gaps, local_diag.warnings
 
 
-@st.cache_data(show_spinner="Fetching shares outstanding and book value...")
+@st.cache_data(show_spinner="Fetching fundamentals (shares outstanding + book value)...")
 def fetch_fundamentals_cached(tickers: tuple):
     local_diag = Diagnostics()
     fundamentals = _fetch_fundamentals(list(tickers), local_diag)
     return fundamentals, local_diag.dropped_tickers, local_diag.warnings
 
 
-def merge_diag_payload(diag, dropped, gaps=None, warnings_list=None):
+def merge_diag_payload(
+    diag: Diagnostics,
+    dropped: dict,
+    gaps: dict | None = None,
+    warnings_list: list | None = None,
+):
     diag.dropped_tickers.update(dropped)
     if gaps:
         diag.data_gaps.update(gaps)
@@ -127,24 +138,25 @@ def merge_diag_payload(diag, dropped, gaps=None, warnings_list=None):
 
 
 @st.cache_data
-def load_universe_cached():
+def load_universe_cached() -> list[str]:
     return load_current_nifty50_universe()
 
 
-def render_metric_card(badge_num, label, value, sub=None, green=False):
-    value_class = "metric-value green" if green else "metric-value"
+# ── UI helpers ────────────────────────────────────────────────────────────────
+def render_metric_card(badge: str, label: str, value: str, sub: str | None = None, green: bool = False):
+    vc = "metric-value green" if green else "metric-value"
     sub_html = f'<div class="metric-sub">{sub}</div>' if sub else ""
     st.markdown(f"""
         <div class="metric-card">
-            <div class="metric-badge">{badge_num}</div>
+            <div class="metric-badge">{badge}</div>
             <div class="metric-label">{label}</div>
-            <div class="{value_class}">{value}</div>
+            <div class="{vc}">{value}</div>
             {sub_html}
         </div>
     """, unsafe_allow_html=True)
 
 
-def style_plotly_dark(fig, height=None):
+def style_plotly_dark(fig: go.Figure, height: int | None = None) -> go.Figure:
     fig.update_layout(
         template="plotly_dark",
         paper_bgcolor="rgba(0,0,0,0)",
@@ -157,25 +169,33 @@ def style_plotly_dark(fig, height=None):
     return fig
 
 
+def safe_fmt(fmt: str, val, fallback: str = "—") -> str:
+    """Format a value; return fallback if val is NaN or None."""
+    try:
+        if val is None or (isinstance(val, float) and np.isnan(val)):
+            return fallback
+        return fmt.format(val)
+    except (ValueError, TypeError):
+        return fallback
+
+
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## Controls")
     universe_selection = st.selectbox("Universe", ["Nifty 50", "Custom Tickers"])
 
     if universe_selection == "Custom Tickers":
-        custom_input = st.text_area("Tickers (comma-separated)", value="RELIANCE.NS, TCS.NS, HDFCBANK.NS")
-        active_universe = [t.strip().upper() for t in custom_input.split(",") if t.strip()]
+        raw_input = st.text_area("Tickers (comma-separated)", value="RELIANCE.NS, TCS.NS, HDFCBANK.NS")
+        active_universe = [t.strip().upper() for t in raw_input.split(",") if t.strip()]
     else:
         active_universe = load_universe_cached()
-        st.caption(
-            "⚠️ Uses today's Nifty 50 members projected backward. Survivorship bias is present."
-        )
+        st.caption("⚠️ Uses today's Nifty 50 projected backward — survivorship bias present.")
 
     st.markdown("---")
     st.markdown("### Factor Sorting")
     sort_attribute = st.selectbox(
         "Sort by",
-        ["Alpha (Ann %)", "R-Squared", "Volatility (Ann %, EWMA)", "Volatility (Ann %, i.i.d.)", "Beta Market"]
+        ["Alpha (Ann %)", "R-Squared", "Volatility (Ann %, EWMA)", "Volatility (Ann %, i.i.d.)", "Beta Market"],
     )
 
     st.markdown("---")
@@ -183,7 +203,7 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("### Risk-Free Rate")
-    rbi_rate = st.number_input("Annualized Rate", 0.0, 0.15, 0.065, step=0.005, format="%.4f")
+    rbi_rate = st.number_input("Annualised Rate", 0.0, 0.15, 0.065, step=0.005, format="%.4f")
     st.caption("Held constant — no free daily Indian T-Bill series available.")
 
 end_date   = datetime.date.today()
@@ -199,7 +219,10 @@ st.markdown("""
 
 # ── Data pipeline ─────────────────────────────────────────────────────────────
 diag = Diagnostics()
-raw_data, _dropped, _gaps, _warnings = fetch_terminal_data_cached(active_universe, start_date, end_date)
+
+# Sorted tuple → stable, hashable cache key regardless of universe order
+universe_key = tuple(sorted(active_universe))
+raw_data, _dropped, _gaps, _warnings = fetch_terminal_data_cached(universe_key, start_date, end_date)
 merge_diag_payload(diag, _dropped, _gaps, _warnings)
 
 if raw_data.empty or len(raw_data.columns) <= 1:
@@ -229,56 +252,78 @@ if factors.empty or returns.empty:
 regression_matrix = run_factor_regressions(returns, factors, diag)
 
 if regression_matrix.empty:
-    st.error("No stock cleared the minimum-sample regression threshold. Try a longer lookback window.")
+    st.error("No stock passed the minimum-sample threshold. Try a longer lookback window.")
     with st.expander("Diagnostics", expanded=True):
         st.dataframe(diag.as_dataframe(), use_container_width=True)
     st.stop()
 
-# Ensure all columns are numeric before any arithmetic
+# Belt-and-suspenders numeric cast (guards against any pandas version dtype quirk)
 regression_matrix = regression_matrix.apply(pd.to_numeric, errors="coerce")
 
-regression_matrix["Z_Score_Rank"] = (
-    (regression_matrix[sort_attribute] - regression_matrix[sort_attribute].mean())
-    / regression_matrix[sort_attribute].std()
-)
+# Z-score ranking with guards for edge cases
+if len(regression_matrix) < 2:
+    st.warning(f"Only {len(regression_matrix)} stock(s) passed regression — Z-score ranking requires ≥ 2.")
+    regression_matrix["Z_Score_Rank"] = 0.0
+else:
+    col_std = regression_matrix[sort_attribute].std()
+    if col_std == 0 or pd.isna(col_std):
+        regression_matrix["Z_Score_Rank"] = 0.0
+    else:
+        regression_matrix["Z_Score_Rank"] = (
+            (regression_matrix[sort_attribute] - regression_matrix[sort_attribute].mean()) / col_std
+        )
+
 sorted_matrix = regression_matrix.sort_values(by="Z_Score_Rank", ascending=False)
 
 # ── KPI cards ─────────────────────────────────────────────────────────────────
-st.markdown(f"Analysing **{len(stock_tickers)}** equities from **{start_date}** to **{end_date}**")
+st.markdown(f"Analysing **{len(stock_tickers)}** equities · **{start_date}** → **{end_date}**")
 
-m1, m2, m3, m4 = st.columns(4)
-with m1:
+c1, c2, c3, c4 = st.columns(4)
+with c1:
     render_metric_card("1", "Equities Regressed", f"{len(sorted_matrix)} / {len(stock_tickers)}", sub=f"AS OF: {end_date}")
-with m2:
-    render_metric_card("2", "Mean Cross-Sectional R²", f"{sorted_matrix['R-Squared'].mean():.0%}", green=True)
-with m3:
-    render_metric_card("3", "Top Alpha", f"{sorted_matrix.index[0].replace('.NS', '')}")
-with m4:
+with c2:
+    mean_r2 = sorted_matrix["R-Squared"].mean()
+    render_metric_card("2", "Mean Cross-Sectional R²", safe_fmt("{:.0%}", mean_r2), green=True)
+with c3:
+    top_ticker = sorted_matrix.index[0].replace(".NS", "")
+    render_metric_card("3", "Top Alpha", top_ticker)
+with c4:
     n_issues = len(diag.dropped_tickers) + len(diag.warnings)
-    render_metric_card("4", "Diagnostic Flags", f"{n_issues}", sub="dropped + warnings", green=(n_issues == 0))
+    render_metric_card("4", "Diagnostic Flags", str(n_issues), sub="dropped + warnings", green=(n_issues == 0))
 
 st.markdown("<div style='height:1.1rem'></div>", unsafe_allow_html=True)
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
-tab_screener, tab_heatmap, tab_decomposition, tab_diagnostics = st.tabs([
-    "Screener", "Factor Heatmap", "Decomposition", "Diagnostics"
-])
+tab_screener, tab_heatmap, tab_decomposition, tab_diagnostics = st.tabs(
+    ["Screener", "Factor Heatmap", "Decomposition", "Diagnostics"]
+)
 
-# ── SCREENER TAB ──────────────────────────────────────────────────────────────
+# ── SCREENER ──────────────────────────────────────────────────────────────────
 with tab_screener:
 
+    # Scatter — Risk / Return
     st.markdown("<div class='panel-title'>Risk / Return</div>", unsafe_allow_html=True)
 
     df_sc = sorted_matrix.reset_index().copy()
+    # When DataFrame index has no name, reset_index creates a column called "index"
     df_sc.rename(columns={"index": "raw_ticker"}, inplace=True)
     df_sc["Ticker"] = df_sc["raw_ticker"].str.replace(".NS", "", regex=False)
 
-    # Cast to float explicitly to avoid any object-dtype issues
     x_vals = pd.to_numeric(df_sc["Volatility (Ann %, EWMA)"], errors="coerce")
-    y_vals = pd.to_numeric(df_sc["Alpha (Ann %)"],             errors="coerce")
-    c_vals = pd.to_numeric(df_sc["Z_Score_Rank"],              errors="coerce")
-    b_vals = pd.to_numeric(df_sc["Beta Market"],               errors="coerce")
-    r_vals = pd.to_numeric(df_sc["R-Squared"],                 errors="coerce")
+    y_vals = pd.to_numeric(df_sc["Alpha (Ann %)"],            errors="coerce")
+    c_vals = pd.to_numeric(df_sc["Z_Score_Rank"],             errors="coerce")
+    b_vals = pd.to_numeric(df_sc["Beta Market"],              errors="coerce")
+    r_vals = pd.to_numeric(df_sc["R-Squared"],                errors="coerce")
+
+    # list-of-tuples avoids numpy dtype coercion issues with mixed str+float
+    customdata = list(zip(
+        df_sc["Ticker"].tolist(),
+        y_vals.round(1).tolist(),
+        x_vals.round(1).tolist(),
+        c_vals.round(2).tolist(),
+        b_vals.round(2).tolist(),
+        r_vals.round(3).tolist(),
+    ))
 
     scatter_fig = go.Figure()
     scatter_fig.add_trace(go.Scatter(
@@ -288,8 +333,9 @@ with tab_screener:
         marker=dict(
             size=12,
             color=c_vals,
+            # Midpoint = slate grey (#94a3b8) — visible on dark bg; not confused with background
             colorscale=[[0.0, "#38bdf8"], [0.5, "#94a3b8"], [1.0, ACCENT]],
-            cmid=0,
+            cmid=0,                      # pin the colour midpoint exactly at Z-score = 0
             line=dict(width=1, color="#0a0a0d"),
             colorbar=dict(
                 title=dict(text="Z-Score", font=dict(size=11, color="#9a9aa3")),
@@ -299,14 +345,7 @@ with tab_screener:
             ),
             showscale=True,
         ),
-        customdata=list(zip(
-            df_sc["Ticker"],
-            y_vals.round(1),
-            x_vals.round(1),
-            c_vals.round(2),
-            b_vals.round(2),
-            r_vals.round(3),
-        )),
+        customdata=customdata,
         hovertemplate=(
             "<b>%{customdata[0]}</b><br>"
             "Alpha: %{customdata[1]}%<br>"
@@ -318,7 +357,11 @@ with tab_screener:
         ),
     ))
 
-    scatter_fig.add_hline(y=0, line_dash="dot", line_color="rgba(255,255,255,0.12)", line_width=1)
+    # Dotted zero-alpha reference line
+    scatter_fig.add_hline(
+        y=0, line_dash="dot",
+        line_color="rgba(255,255,255,0.12)", line_width=1,
+    )
 
     scatter_fig.update_layout(
         template="plotly_dark",
@@ -343,15 +386,20 @@ with tab_screener:
     st.plotly_chart(scatter_fig, use_container_width=True)
     st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
 
-    # ── Universe Ranking table ─────────────────────────────────────────────────
+    # Universe Ranking table
     st.markdown(
         f"<div class='panel-title'>Universe Ranking &nbsp;"
         f"<span style='color:#71717a;font-weight:500;font-size:0.85rem;'>"
         f"Sorted by {sort_attribute} Z-Score</span></div>",
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
 
     display_df = sorted_matrix.copy()
+
+    # Fill any NaN before string formatting to avoid "+nan%" in the table
+    display_df = display_df.fillna(0.0)
+
+    # Strip .NS from index for display
     display_df.index = display_df.index.str.replace(".NS", "", regex=False)
 
     display_df["Alpha (Ann %)"]              = display_df["Alpha (Ann %)"].map("{:+.2f}%".format)
@@ -382,17 +430,20 @@ with tab_screener:
 
     st.dataframe(display_df, use_container_width=True, height=540)
     st.caption(
-        "Vol EWMA (λ=0.94) weights recent obs more heavily; Vol i.i.d. is flat stdev × √252. "
-        "DoF = N − 4. HAC lags = Newey-West rule. Hover scatter points for detail."
+        "Vol EWMA (λ=0.94) weights recent observations more heavily than Vol i.i.d. (flat stdev × √252). "
+        "DoF = N − 4 (3 factors + intercept). HAC lags = Newey-West data-dependent rule. "
+        "Hover over scatter points above for full per-stock detail."
     )
 
-# ── HEATMAP TAB ───────────────────────────────────────────────────────────────
+# ── HEATMAP ───────────────────────────────────────────────────────────────────
 with tab_heatmap:
     st.markdown("<div class='panel-title'>Factor Loadings Heatmap</div>", unsafe_allow_html=True)
     st.markdown(
-        "<span style='color:#9a9aa3;'>Systematic factor exposures across the universe.</span>",
-        unsafe_allow_html=True
+        "<span style='color:#9a9aa3;'>Systematic factor exposures across the universe — "
+        "reveals size and value clustering at a glance.</span>",
+        unsafe_allow_html=True,
     )
+
     heatmap_data = sorted_matrix[["Beta Market", "Beta Size (SMB)", "Beta Value (HML)"]].copy()
     heatmap_data.index = heatmap_data.index.str.replace(".NS", "", regex=False)
 
@@ -401,80 +452,92 @@ with tab_heatmap:
         labels=dict(x="Factor", y="Ticker", color="Beta"),
         color_continuous_scale=["#38bdf8", "#14141a", ACCENT],
         color_continuous_midpoint=0,
-        aspect="auto"
+        aspect="auto",
     )
     style_plotly_dark(heatmap_fig, height=520)
     st.plotly_chart(heatmap_fig, use_container_width=True)
 
-# ── DECOMPOSITION TAB ─────────────────────────────────────────────────────────
+# ── DECOMPOSITION ─────────────────────────────────────────────────────────────
 with tab_decomposition:
     col_ui, col_chart = st.columns([1, 2.2], gap="large")
+    # sorted_matrix index still has .NS — keep it so .loc[] works correctly
     available_assets = sorted(sorted_matrix.index)
 
     with col_ui:
         selected_asset = st.selectbox("Select Equity", options=available_assets)
         asset_stats = sorted_matrix.loc[selected_asset]
+        display_name = selected_asset.replace(".NS", "")
 
-        st.markdown(f"<div class='panel-title'>{selected_asset.replace('.NS', '')}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='panel-title'>{display_name}</div>", unsafe_allow_html=True)
 
-        st.metric("Annualized Alpha", f"{float(asset_stats['Alpha (Ann %)']):.2f}%")
-        st.metric("Market Beta",      f"{float(asset_stats['Beta Market']):.3f}")
+        # Extract as Python scalars to avoid any Series/object weirdness in st.metric
+        alpha_val = float(asset_stats["Alpha (Ann %)"])
+        beta_mkt  = float(asset_stats["Beta Market"])
+        beta_smb  = float(asset_stats["Beta Size (SMB)"])
+        beta_hml  = float(asset_stats["Beta Value (HML)"])
+        r2_val    = float(asset_stats["R-Squared"])
+        n_obs_val = int(asset_stats["N (obs)"])
+        dof_val   = int(asset_stats["DoF"])
+        hac_val   = int(asset_stats["HAC Lags"])
+        tstat_val = float(asset_stats["t-stat Alpha"])
+
+        st.metric("Annualised Alpha", f"{alpha_val:+.2f}%")
+        st.metric("Market Beta", f"{beta_mkt:.3f}")
 
         st.markdown("#### Factor Tilts")
-        st.write(f"**Size (SMB):** `{float(asset_stats['Beta Size (SMB)']):.3f}`")
-        st.write(f"**Value (HML):** `{float(asset_stats['Beta Value (HML)']):.3f}`")
-        st.write(f"**R²:** `{float(asset_stats['R-Squared']):.2%}`")
-        st.write(f"**N:** `{int(asset_stats['N (obs)'])}` | **DoF:** `{int(asset_stats['DoF'])}` | **HAC lags:** `{int(asset_stats['HAC Lags'])}`")
+        st.write(f"**Size (SMB):** `{beta_smb:+.3f}`")
+        st.write(f"**Value (HML):** `{beta_hml:+.3f}`")
+        st.write(f"**R²:** `{r2_val:.2%}`")
+        st.write(f"**N:** `{n_obs_val}` | **DoF:** `{dof_val}` | **HAC lags:** `{hac_val}`")
 
-        tstat = float(asset_stats["t-stat Alpha"])
-        is_sig = abs(tstat) > 1.96
-        sig_label = "Statistically significant" if is_sig else "Not statistically significant"
+        is_sig  = abs(tstat_val) > 1.96
+        sig_lbl = "Statistically significant" if is_sig else "Not statistically significant"
+        cmp_sym = ">" if is_sig else "≤"
         st.markdown('<div class="status-box">', unsafe_allow_html=True)
         st.markdown(
-            f"Alpha t-stat = **`{tstat:.2f}`** → **{sig_label}** at 95% (|t| {'>' if is_sig else '≤'} 1.96)."
+            f"Alpha t-stat = **`{tstat_val:.2f}`** → **{sig_lbl}** at 95% (|t| {cmp_sym} 1.96)."
         )
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
 
     with col_chart:
-        n_obs = int(asset_stats["N (obs)"])
-        rolling_window = min(60, max(10, n_obs // 3))
-        if n_obs < rolling_window + 10:
-            st.warning(f"Insufficient history for rolling analysis ({n_obs} observations available).")
+        rolling_window = min(60, max(10, n_obs_val // 3))
+        if n_obs_val < rolling_window + 10:
+            st.warning(f"Insufficient history for rolling analysis ({n_obs_val} observations).")
         else:
             with st.spinner("Computing rolling regressions..."):
                 rolling_df = calculate_rolling_exposures(
                     returns[selected_asset], factors, window=rolling_window
                 )
-                if rolling_df.empty:
-                    st.info("Rolling exposures could not be computed for this asset and window.")
-                else:
-                    roll_fig = px.line(
-                        rolling_df.reset_index(),
-                        x="Date",
-                        y=["Market Factor", "Size Factor (SMB)", "Value Factor (HML)"],
-                        labels={"value": "Beta", "variable": "Factor"},
-                        color_discrete_map={
-                            "Market Factor":      "#38bdf8",
-                            "Size Factor (SMB)":  GREEN,
-                            "Value Factor (HML)": ACCENT,
-                        }
-                    )
-                    style_plotly_dark(roll_fig)
-                    roll_fig.update_layout(
-                        title=f"{rolling_window}-Day Rolling Betas: {selected_asset.replace('.NS', '')}",
-                        hovermode="x unified",
-                        legend=dict(orientation="h", yref="container", y=1.05, x=0.01),
-                    )
-                    st.plotly_chart(roll_fig, use_container_width=True)
+            if rolling_df.empty:
+                st.info("Rolling exposures could not be computed for this asset and window.")
+            else:
+                roll_fig = px.line(
+                    rolling_df.reset_index(),
+                    x="Date",
+                    y=["Market Factor", "Size Factor (SMB)", "Value Factor (HML)"],
+                    labels={"value": "Beta", "variable": "Factor"},
+                    color_discrete_map={
+                        "Market Factor":      "#38bdf8",
+                        "Size Factor (SMB)":  GREEN,
+                        "Value Factor (HML)": ACCENT,
+                    },
+                )
+                style_plotly_dark(roll_fig)
+                roll_fig.update_layout(
+                    title=f"{rolling_window}-Day Rolling Betas: {display_name}",
+                    hovermode="x unified",
+                    legend=dict(orientation="h", yref="container", y=1.05, x=0.01),
+                )
+                st.plotly_chart(roll_fig, use_container_width=True)
 
-# ── DIAGNOSTICS TAB ───────────────────────────────────────────────────────────
+# ── DIAGNOSTICS ───────────────────────────────────────────────────────────────
 with tab_diagnostics:
     st.markdown("<div class='panel-title'>Diagnostics</div>", unsafe_allow_html=True)
-    st.caption("All dropped tickers, data gaps, and run-level warnings are recorded here.")
+    st.caption("All dropped tickers, data gaps, and run-level warnings recorded here.")
 
     diag_df = diag.as_dataframe()
     if diag_df.empty:
-        st.success("No tickers were dropped and no data gaps were detected in this run.")
+        st.success("No tickers dropped and no data gaps detected in this run.")
     else:
         st.dataframe(diag_df, use_container_width=True, height=300)
 
@@ -490,27 +553,27 @@ with tab_diagnostics:
 
     st.markdown("#### Known Simplifications")
     st.markdown("""
-- **Fundamentals are not point-in-time.** Book value and shares outstanding are today's values held static across the window.
-- **Risk-free rate is held constant** — no free daily Indian T-Bill series available.
-- **Universe is a current snapshot** — survivorship bias present without a paid index-history source.
-- **EWMA volatility (λ=0.94)** is the RiskMetrics approximation, not a fitted GARCH(1,1).
+- **Fundamentals are not point-in-time.** Book value and shares outstanding are today's values held static across the window (introduces look-ahead bias in SMB/HML construction).
+- **Risk-free rate is held constant** across the full window — does not track actual RBI repo rate changes.
+- **Universe is a current snapshot** — survivorship bias is present without a paid historical index-constituent source.
+- **EWMA volatility (λ=0.94)** is the RiskMetrics approximation; a fitted GARCH(1,1) would be statistically superior.
     """)
 
 # ── Footer ────────────────────────────────────────────────────────────────────
-total_possible_obs = len(raw_data) * len(stock_tickers)
-total_gap_obs      = sum(diag.data_gaps.values())
-consistency_pct    = 100 * (1 - total_gap_obs / total_possible_obs) if total_possible_obs else 100
+total_possible = len(raw_data) * len(stock_tickers)
+total_gaps     = sum(diag.data_gaps.values())
+completeness   = 100.0 * (1 - total_gaps / total_possible) if total_possible > 0 else 100.0
 
 st.markdown(f"""
     <div class="footer-bar">
         <div>
             CACHE: <span class="ok">ACTIVE</span>
             <span class="sep">|</span>
-            RISK-FREE: <span class="ok">{rbi_rate*100:.3f}%</span>
+            RISK-FREE: <span class="ok">{rbi_rate * 100:.3f}%</span>
             <span class="sep">|</span>
             WINDOW: <span class="ok">{lookback_years} YEAR{'S' if lookback_years != 1 else ''}</span>
             <span class="sep">|</span>
-            DATA COMPLETENESS: <span class="ok">{consistency_pct:.1f}%</span>
+            DATA COMPLETENESS: <span class="ok">{completeness:.1f}%</span>
             <span class="sep">|</span>
             DROPPED: <span class="ok">{len(diag.dropped_tickers)}</span>
         </div>
