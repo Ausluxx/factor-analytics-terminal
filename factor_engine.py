@@ -16,6 +16,7 @@ TRADING_DAYS_PER_YEAR = 252
 RF_PROXY_TICKER = "^IRX"
 
 
+# ── Diagnostics ───────────────────────────────────────────────────────────────
 @dataclass
 class Diagnostics:
     notes: list[str] = field(default_factory=list)
@@ -36,12 +37,18 @@ class Diagnostics:
         logger.info(msg)
 
     def as_dataframe(self) -> pd.DataFrame:
-        rows = [{"Ticker": t, "Reason": r, "Type": "Dropped"} for t, r in self.dropped_tickers.items()]
-        rows += [{"Ticker": t, "Reason": f"{n} missing trading days (NaN, not filled)", "Type": "Data Gap"}
-                 for t, n in self.data_gaps.items()]
+        rows = [
+            {"Ticker": t, "Reason": r, "Type": "Dropped"}
+            for t, r in self.dropped_tickers.items()
+        ]
+        rows += [
+            {"Ticker": t, "Reason": f"{n} missing trading days (NaN, not filled)", "Type": "Data Gap"}
+            for t, n in self.data_gaps.items()
+        ]
         return pd.DataFrame(rows)
 
 
+# ── Universe ──────────────────────────────────────────────────────────────────
 def load_current_nifty50_universe() -> list[str]:
     return [
         "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS", "BHARTIARTL.NS",
@@ -56,6 +63,7 @@ def load_current_nifty50_universe() -> list[str]:
     ]
 
 
+# ── Data fetching ─────────────────────────────────────────────────────────────
 def fetch_terminal_data(
     tickers: list[str], start: datetime.date, end: datetime.date, diag: Diagnostics
 ) -> pd.DataFrame:
@@ -79,13 +87,17 @@ def fetch_terminal_data(
 
     prices = downloaded["Close"]
 
+    # Flatten MultiIndex columns — yfinance v0.2+ sometimes returns one
+    if isinstance(prices.columns, pd.MultiIndex):
+        prices.columns = prices.columns.get_level_values(0)
+
     fully_missing = prices.columns[prices.isna().all()].tolist()
     for t in fully_missing:
-        diag.drop(t, "No price data returned for the requested window (bad ticker, delisted, or no trading history).")
+        diag.drop(t, "No price data returned (bad ticker, delisted, or no trading history).")
     prices = prices.drop(columns=fully_missing)
 
     if BENCHMARK_MKT not in prices.columns:
-        diag.warn(f"Benchmark {BENCHMARK_MKT} returned no usable data for this window — cannot construct MKT_RF. Aborting.")
+        diag.warn(f"Benchmark {BENCHMARK_MKT} returned no usable data — cannot construct MKT_RF.")
         return pd.DataFrame()
 
     expected_days = len(prices.index)
@@ -105,26 +117,29 @@ def fetch_terminal_data(
 def fetch_fundamentals(tickers: list[str], diag: Diagnostics) -> pd.DataFrame:
     import yfinance as yf
 
-    records = {}
+    records: dict[str, dict] = {}
     for t in tickers:
         try:
             info = yf.Ticker(t).info
             shares = info.get("sharesOutstanding")
             book_value_per_share = info.get("bookValue")
             if shares is None or book_value_per_share is None or book_value_per_share <= 0:
-                diag.drop(t, "Missing shares outstanding or book value per share — cannot compute market cap or book-to-market.")
+                diag.drop(t, "Missing shares outstanding or book value — cannot compute market cap or B/M.")
                 continue
-            records[t] = {"shares_outstanding": float(shares), "book_value_per_share": float(book_value_per_share)}
+            records[t] = {
+                "shares_outstanding": float(shares),
+                "book_value_per_share": float(book_value_per_share),
+            }
         except (KeyError, ValueError) as e:
             diag.drop(t, f"Malformed fundamentals payload: {e}")
         except Exception as e:
             diag.drop(t, f"Unexpected error fetching fundamentals: {type(e).__name__}: {e}")
 
     if not records:
-        diag.warn("No usable fundamentals retrieved for any ticker — SMB/HML cannot be constructed.")
+        diag.warn("No usable fundamentals retrieved — SMB/HML cannot be constructed.")
         return pd.DataFrame(columns=["shares_outstanding", "book_value_per_share"])
 
-    # from_dict with orient="index" preserves column names across all pandas versions
+    # from_dict orient="index" preserves column names on all pandas versions
     df = pd.DataFrame.from_dict(records, orient="index")
     df["shares_outstanding"] = df["shares_outstanding"].astype(float)
     df["book_value_per_share"] = df["book_value_per_share"].astype(float)
@@ -136,131 +151,165 @@ def fetch_risk_free_series(
 ) -> pd.Series:
     if manual_annual_rate is None:
         manual_annual_rate = 0.065
-        diag.warn("No risk-free rate supplied; defaulting to 6.5% annualized.")
+        diag.warn("No risk-free rate supplied; defaulting to 6.5% annualised.")
 
     diag.note(
-        f"Risk-free rate held constant at {manual_annual_rate:.3%} (annualized) across the "
-        "full window — no free, reliable historical Indian T-Bill series was available."
+        f"Risk-free rate held constant at {manual_annual_rate:.3%} (annualised) across the full "
+        "window — no free reliable historical Indian T-Bill series available."
     )
     daily_rate = manual_annual_rate / TRADING_DAYS_PER_YEAR
     return pd.Series(daily_rate, index=index, name="RF")
 
 
+# ── Factor construction ───────────────────────────────────────────────────────
 def build_fama_french_factors(
     prices_df: pd.DataFrame,
     fundamentals_df: pd.DataFrame,
     rf_series: pd.Series,
     diag: Diagnostics,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
+
+    # pct_change with fill_method=None preserves NaN — never fabricates zero returns
     returns = prices_df.pct_change(fill_method=None)
     stock_cols = [c for c in returns.columns if c != BENCHMARK_MKT]
+
+    # Drop only rows where benchmark is NaN; stock NaNs are preserved
     returns = returns.dropna(subset=[BENCHMARK_MKT])
 
+    # Match tickers that have both prices and fundamentals
     if fundamentals_df.empty:
-        diag.warn("Fundamentals DataFrame is empty — SMB/HML cannot be constructed. Check yfinance connectivity.")
-        common_tickers = []
+        diag.warn("Fundamentals DataFrame is empty — SMB/HML cannot be constructed.")
+        common_tickers: list[str] = []
     else:
         common_tickers = [t for t in stock_cols if t in fundamentals_df.index]
 
-    missing_fundamentals = set(stock_cols) - set(common_tickers)
-    for t in missing_fundamentals:
-        diag.drop(
-            t,
-            "No fundamentals available — excluded from SMB/HML basket construction.",
-        )
+    for t in sorted(set(stock_cols) - set(common_tickers)):
+        diag.drop(t, "No fundamentals — excluded from SMB/HML basket construction.")
 
     if len(common_tickers) < 6:
-        diag.warn(f"Only {len(common_tickers)} tickers have usable fundamentals — SMB/HML may be unstable.")
+        diag.warn(f"Only {len(common_tickers)} tickers have usable fundamentals — SMB/HML baskets will be noisy.")
 
+    # Factor scaffold
     factors = pd.DataFrame(index=returns.index)
     rf_aligned = rf_series.reindex(returns.index).ffill()
     factors["MKT_RF"] = returns[BENCHMARK_MKT] - rf_aligned
     factors["RF"] = rf_aligned
 
+    smb_vals = pd.Series(np.nan, index=returns.index, dtype=float)
+    hml_vals = pd.Series(np.nan, index=returns.index, dtype=float)
+
     years = returns.index.year
-    smb_vals = pd.Series(index=returns.index, dtype=float)
-    hml_vals = pd.Series(index=returns.index, dtype=float)
 
     for yr in sorted(set(years)):
         year_mask = years == yr
         year_dates = returns.index[year_mask]
+
         if len(year_dates) == 0 or len(common_tickers) == 0:
             continue
+
         anchor_date = year_dates[0]
-
-        price_at_anchor = prices_df.loc[anchor_date, common_tickers]
+        price_at_anchor = prices_df.loc[anchor_date, common_tickers].astype(float)
         shares = fundamentals_df.loc[common_tickers, "shares_outstanding"].astype(float)
-        market_cap = price_at_anchor * shares
-
         book_per_share = fundamentals_df.loc[common_tickers, "book_value_per_share"].astype(float)
+
+        market_cap = price_at_anchor * shares
         book_to_market = book_per_share / price_at_anchor
 
-        valid = market_cap.notna() & book_to_market.notna() & (price_at_anchor > 0)
+        # Strict validity: non-null, finite, positive price, finite B/M
+        valid = (
+            market_cap.notna()
+            & book_to_market.notna()
+            & (price_at_anchor > 0)
+            & np.isfinite(market_cap)
+            & np.isfinite(book_to_market)
+        )
         market_cap = market_cap[valid]
         book_to_market = book_to_market[valid]
 
         if len(market_cap) < 6:
-            diag.warn(f"Year {yr}: fewer than 6 valid names for SMB/HML basket construction.")
+            diag.warn(f"Year {yr}: only {len(market_cap)} valid names — skipping SMB/HML.")
             continue
 
+        # Size: median split
         size_median = market_cap.median()
-        small = market_cap[market_cap <= size_median].index
-        big = market_cap[market_cap > size_median].index
+        small = market_cap[market_cap <= size_median].index.tolist()
+        big   = market_cap[market_cap >  size_median].index.tolist()
 
+        # Value: 30th / 70th percentile B/M split; middle 40% excluded from basket definition
         btm_30 = book_to_market.quantile(0.30)
         btm_70 = book_to_market.quantile(0.70)
-        growth = book_to_market[book_to_market <= btm_30].index
-        value = book_to_market[book_to_market >= btm_70].index
+        growth = book_to_market[book_to_market <= btm_30].index.tolist()
+        value  = book_to_market[book_to_market >= btm_70].index.tolist()
 
+        # Six portfolios
         sv = [t for t in small if t in value]
         sg = [t for t in small if t in growth]
-        bv = [t for t in big if t in value]
-        bg = [t for t in big if t in growth]
+        bv = [t for t in big   if t in value]
+        bg = [t for t in big   if t in growth]
 
         year_returns = returns.loc[year_mask, common_tickers]
 
-        def basket_mean(names):
-            if len(names) == 0:
-                return pd.Series(np.nan, index=year_returns.index)
-            return year_returns[names].mean(axis=1)
+        # Explicit parameter avoids closure-over-loop-variable risk
+        def basket_mean(names: list[str], yr_rets: pd.DataFrame) -> pd.Series:
+            if not names:
+                return pd.Series(np.nan, index=yr_rets.index)
+            return yr_rets[names].mean(axis=1)
 
-        r_sv, r_sg, r_bv, r_bg = basket_mean(sv), basket_mean(sg), basket_mean(bv), basket_mean(bg)
+        r_sv = basket_mean(sv, year_returns)
+        r_sg = basket_mean(sg, year_returns)
+        r_bv = basket_mean(bv, year_returns)
+        r_bg = basket_mean(bg, year_returns)
 
-        r_sv = r_sv.where(r_sv.notna(), basket_mean(small))
-        r_sg = r_sg.where(r_sg.notna(), basket_mean(small))
-        r_bv = r_bv.where(r_bv.notna(), basket_mean(big))
-        r_bg = r_bg.where(r_bg.notna(), basket_mean(big))
+        # Fallback: if a sub-basket is entirely empty, use the broader size bucket
+        r_sv = r_sv.where(r_sv.notna(), basket_mean(small, year_returns))
+        r_sg = r_sg.where(r_sg.notna(), basket_mean(small, year_returns))
+        r_bv = r_bv.where(r_bv.notna(), basket_mean(big,   year_returns))
+        r_bg = r_bg.where(r_bg.notna(), basket_mean(big,   year_returns))
 
-        smb_vals.loc[year_dates] = ((r_sv + r_sg) / 2 - (r_bv + r_bg) / 2).values
-        hml_vals.loc[year_dates] = ((r_sv + r_bv) / 2 - (r_sg + r_bg) / 2).values
+        # SMB = small_avg − big_avg (pure size, orthogonal to value)
+        # HML = value_avg − growth_avg (pure value, orthogonal to size)
+        smb_year = (r_sv + r_sg) / 2.0 - (r_bv + r_bg) / 2.0
+        hml_year = (r_sv + r_bv) / 2.0 - (r_sg + r_bg) / 2.0
+
+        smb_vals.loc[year_dates] = smb_year.values
+        hml_vals.loc[year_dates] = hml_year.values
 
     factors["SMB"] = smb_vals
     factors["HML"] = hml_vals
+
+    # Keep only dates where all three factors are non-NaN
     factors = factors.dropna(subset=["MKT_RF", "SMB", "HML"])
     aligned_returns = returns.loc[factors.index, stock_cols]
 
     return factors, aligned_returns
 
 
+# ── Regressions ───────────────────────────────────────────────────────────────
 MIN_OBS_FOR_REGRESSION = 60
 
 
-def run_factor_regressions(returns_df: pd.DataFrame, factors_df: pd.DataFrame, diag: Diagnostics) -> pd.DataFrame:
-    results = {}
+def run_factor_regressions(
+    returns_df: pd.DataFrame, factors_df: pd.DataFrame, diag: Diagnostics
+) -> pd.DataFrame:
+    results: dict[str, dict] = {}
     X = sm.add_constant(factors_df[["MKT_RF", "SMB", "HML"]])
 
     for stock in returns_df.columns:
         y = returns_df[stock] - factors_df["RF"]
-        common = y.dropna().index.intersection(X.index)
+        # Intersect valid stock-return dates with valid factor dates
+        common = y.dropna().index.intersection(X.dropna().index)
         n_obs = len(common)
 
         if n_obs < MIN_OBS_FOR_REGRESSION:
-            diag.drop(stock, f"Only {n_obs} usable observations (< minimum {MIN_OBS_FOR_REGRESSION}) — regression skipped.")
+            diag.drop(stock, f"Only {n_obs} usable observations (< {MIN_OBS_FOR_REGRESSION}) — regression skipped.")
             continue
 
         try:
+            # Newey-West lag: Andrews (1991) data-dependent rule
             maxlags = max(1, int(np.floor(4 * (n_obs / 100) ** (2 / 9))))
-            model = sm.OLS(y.loc[common], X.loc[common]).fit(cov_type="HAC", cov_kwds={"maxlags": maxlags})
+            model = sm.OLS(y.loc[common], X.loc[common]).fit(
+                cov_type="HAC", cov_kwds={"maxlags": maxlags}
+            )
         except np.linalg.LinAlgError as e:
             diag.drop(stock, f"Singular design matrix: {e}")
             continue
@@ -268,66 +317,75 @@ def run_factor_regressions(returns_df: pd.DataFrame, factors_df: pd.DataFrame, d
             diag.drop(stock, f"Regression input error: {e}")
             continue
 
-        resid_returns = y.loc[common]
-        naive_vol = float(resid_returns.std(ddof=1)) * np.sqrt(TRADING_DAYS_PER_YEAR) * 100
-        ewma_vol = _ewma_annualized_vol(resid_returns) * 100
+        resid = y.loc[common]
+        naive_vol = float(resid.std(ddof=1)) * np.sqrt(TRADING_DAYS_PER_YEAR) * 100.0
+        ewma_vol  = _ewma_annualized_vol(resid) * 100.0
 
+        # All values cast to Python scalars — prevents dtype leakage into DataFrame
         results[stock] = {
-            "Alpha (Ann %)":             float(model.params["const"]) * TRADING_DAYS_PER_YEAR * 100,
-            "Beta Market":               float(model.params["MKT_RF"]),
-            "Beta Size (SMB)":           float(model.params["SMB"]),
-            "Beta Value (HML)":          float(model.params["HML"]),
-            "t-stat Alpha":              float(model.tvalues["const"]),
-            "R-Squared":                 float(model.rsquared),
+            "Alpha (Ann %)":              float(model.params["const"]) * TRADING_DAYS_PER_YEAR * 100.0,
+            "Beta Market":                float(model.params["MKT_RF"]),
+            "Beta Size (SMB)":            float(model.params["SMB"]),
+            "Beta Value (HML)":           float(model.params["HML"]),
+            "t-stat Alpha":               float(model.tvalues["const"]),
+            "R-Squared":                  float(model.rsquared),
             "Volatility (Ann %, i.i.d.)": float(naive_vol),
-            "Volatility (Ann %, EWMA)":  float(ewma_vol),
-            "N (obs)":                   int(n_obs),
-            "DoF":                       int(n_obs - 4),
-            "HAC Lags":                  int(maxlags),
+            "Volatility (Ann %, EWMA)":   float(ewma_vol),
+            "N (obs)":                    int(n_obs),
+            "DoF":                        int(n_obs - 4),
+            "HAC Lags":                   int(maxlags),
         }
 
     if not results:
         diag.warn("No stock cleared the minimum-sample regression threshold — check date range and universe.")
         return pd.DataFrame()
 
-    # Build from list of dicts — preserves dtypes on all pandas versions
-    df = pd.DataFrame.from_dict(results, orient="index")
-    return df
+    return pd.DataFrame.from_dict(results, orient="index")
 
 
 def _ewma_annualized_vol(returns: pd.Series, lam: float = 0.94) -> float:
-    r = returns.dropna().values
+    """EWMA conditional volatility (RiskMetrics, λ=0.94), annualised."""
+    r = returns.dropna().values.astype(float)
     if len(r) < 2:
         return float("nan")
-    var = float(r[0]) ** 2
+    var = r[0] * r[0]
     for x in r[1:]:
-        var = lam * var + (1 - lam) * float(x) ** 2
+        var = lam * var + (1.0 - lam) * x * x
     return float(np.sqrt(var * TRADING_DAYS_PER_YEAR))
 
 
+# ── Rolling exposures ─────────────────────────────────────────────────────────
 def calculate_rolling_exposures(
     stock_series: pd.Series, factors_df: pd.DataFrame, window: int = 60
 ) -> pd.DataFrame:
-    X = sm.add_constant(factors_df[["MKT_RF", "SMB", "HML"]])
-    common = stock_series.dropna().index.intersection(X.index)
-    y = stock_series.loc[common]
-    X_clean = X.loc[common]
-    records = []
-
     if window <= 4:
         raise ValueError("Rolling window must exceed the number of regression parameters (4).")
 
+    X = sm.add_constant(factors_df[["MKT_RF", "SMB", "HML"]])
+
+    # Align on dates where both stock returns and factor returns exist
+    common_idx = stock_series.dropna().index.intersection(X.dropna().index)
+
+    if len(common_idx) < window + 1:
+        return pd.DataFrame(columns=["Market Factor", "Size Factor (SMB)", "Value Factor (HML)"])
+
+    y = stock_series.loc[common_idx]
+    X_clean = X.loc[common_idx]
+    # Pre-align RF so slice indexing is always consistent
+    rf_aligned = factors_df["RF"].reindex(common_idx)
+
+    records = []
     for i in range(window, len(y)):
-        y_slice = y.iloc[i - window:i] - factors_df["RF"].reindex(y.index).iloc[i - window:i].values
+        y_slice = y.iloc[i - window:i].values - rf_aligned.iloc[i - window:i].values
         X_slice = X_clean.iloc[i - window:i]
         try:
             model = sm.OLS(y_slice, X_slice).fit()
         except (np.linalg.LinAlgError, ValueError):
             continue
         records.append({
-            "Date": y.index[i],
-            "Market Factor": float(model.params["MKT_RF"]),
-            "Size Factor (SMB)": float(model.params["SMB"]),
+            "Date":               y.index[i],
+            "Market Factor":      float(model.params["MKT_RF"]),
+            "Size Factor (SMB)":  float(model.params["SMB"]),
             "Value Factor (HML)": float(model.params["HML"]),
         })
 
