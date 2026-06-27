@@ -114,24 +114,109 @@ def fetch_terminal_data(
     return prices
 
 
+def _extract_fundamentals_from_info(info: dict) -> tuple[float | None, float | None]:
+    """Try every known yfinance field name for shares and book value."""
+    shares = (
+        info.get("sharesOutstanding")
+        or info.get("impliedSharesOutstanding")
+        or info.get("floatShares")
+    )
+    book = (
+        info.get("bookValue")
+        or info.get("bookValuePerShare")
+        or info.get("priceToBook") and info.get("previousClose")
+        # priceToBook = price/book → book = price/priceToBook
+    )
+    # Fallback: derive book-per-share from priceToBook ratio if bookValue missing
+    if book is None or book <= 0:
+        ptb = info.get("priceToBook")
+        price = info.get("previousClose") or info.get("regularMarketPreviousClose")
+        if ptb and price and ptb > 0 and price > 0:
+            book = price / ptb
+    return (
+        float(shares) if shares and shares > 0 else None,
+        float(book) if book and book > 0 else None,
+    )
+
+
+def _get_fundamentals_fast_info(ticker_obj) -> tuple[float | None, float | None]:
+    """Try yfinance fast_info — more reliable than .info in recent versions."""
+    try:
+        fi = ticker_obj.fast_info
+        shares = getattr(fi, "shares", None)
+        # fast_info has no book value — return shares only
+        return (float(shares) if shares and shares > 0 else None, None)
+    except Exception:
+        return (None, None)
+
+
+def _get_book_from_balance_sheet(ticker_obj) -> float | None:
+    """Derive book value per share from the balance sheet as last resort."""
+    try:
+        bs = ticker_obj.quarterly_balance_sheet
+        if bs is None or bs.empty:
+            bs = ticker_obj.balance_sheet
+        if bs is None or bs.empty:
+            return None
+        # Stockholders equity rows vary by yfinance version
+        for row in ["Stockholders Equity", "Total Stockholder Equity",
+                    "Common Stock Equity", "Total Equity Gross Minority Interest"]:
+            if row in bs.index:
+                equity = float(bs.loc[row].iloc[0])
+                if equity > 0:
+                    return equity  # total equity — divided by shares later
+        return None
+    except Exception:
+        return None
+
+
 def fetch_fundamentals(tickers: list[str], diag: Diagnostics) -> pd.DataFrame:
     import yfinance as yf
 
     records: dict[str, dict] = {}
+
     for t in tickers:
+        shares: float | None = None
+        book: float | None = None
+
         try:
-            info = yf.Ticker(t).info
-            shares = info.get("sharesOutstanding")
-            book_value_per_share = info.get("bookValue")
-            if shares is None or book_value_per_share is None or book_value_per_share <= 0:
-                diag.drop(t, "Missing shares outstanding or book value — cannot compute market cap or B/M.")
+            tk = yf.Ticker(t)
+
+            # ── Method 1: .info dict ───────────────────────────────────────────
+            try:
+                info = tk.info
+                if info and len(info) > 5:          # non-empty response
+                    shares, book = _extract_fundamentals_from_info(info)
+            except Exception:
+                info = {}
+
+            # ── Method 2: fast_info for shares (if Method 1 missed shares) ────
+            if shares is None:
+                shares_fi, _ = _get_fundamentals_fast_info(tk)
+                if shares_fi:
+                    shares = shares_fi
+
+            # ── Method 3: balance sheet for book equity (if still missing) ────
+            if book is None or book <= 0:
+                total_equity = _get_book_from_balance_sheet(tk)
+                if total_equity and shares and shares > 0:
+                    book = total_equity / shares   # converts total equity → per-share
+
+            # ── Validate ───────────────────────────────────────────────────────
+            if shares is None or book is None or book <= 0:
+                diag.drop(
+                    t,
+                    f"Could not retrieve shares outstanding or book value after 3 methods "
+                    f"(shares={'None' if shares is None else f'{shares:.0f}'}, "
+                    f"book={'None' if book is None else f'{book:.2f}'})."
+                )
                 continue
+
             records[t] = {
                 "shares_outstanding": float(shares),
-                "book_value_per_share": float(book_value_per_share),
+                "book_value_per_share": float(book),
             }
-        except (KeyError, ValueError) as e:
-            diag.drop(t, f"Malformed fundamentals payload: {e}")
+
         except Exception as e:
             diag.drop(t, f"Unexpected error fetching fundamentals: {type(e).__name__}: {e}")
 
@@ -139,7 +224,6 @@ def fetch_fundamentals(tickers: list[str], diag: Diagnostics) -> pd.DataFrame:
         diag.warn("No usable fundamentals retrieved — SMB/HML cannot be constructed.")
         return pd.DataFrame(columns=["shares_outstanding", "book_value_per_share"])
 
-    # from_dict orient="index" preserves column names on all pandas versions
     df = pd.DataFrame.from_dict(records, orient="index")
     df["shares_outstanding"] = df["shares_outstanding"].astype(float)
     df["book_value_per_share"] = df["book_value_per_share"].astype(float)
