@@ -15,8 +15,6 @@ BENCHMARK_MKT = "^NSEI"
 TRADING_DAYS_PER_YEAR = 252
 RF_PROXY_TICKER = "^IRX"
 
-
-# ── Diagnostics ───────────────────────────────────────────────────────────────
 @dataclass
 class Diagnostics:
     notes: list[str] = field(default_factory=list)
@@ -48,7 +46,7 @@ class Diagnostics:
         return pd.DataFrame(rows)
 
 
-# ── Universe ──────────────────────────────────────────────────────────────────
+# Universe 
 def load_current_nifty50_universe() -> list[str]:
     return [
         "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS", "BHARTIARTL.NS",
@@ -63,7 +61,7 @@ def load_current_nifty50_universe() -> list[str]:
     ]
 
 
-# ── Data fetching ─────────────────────────────────────────────────────────────
+# Data fetching
 def fetch_terminal_data(
     tickers: list[str], start: datetime.date, end: datetime.date, diag: Diagnostics
 ) -> pd.DataFrame:
@@ -127,7 +125,7 @@ def _extract_fundamentals_from_info(info: dict) -> tuple[float | None, float | N
         or info.get("priceToBook") and info.get("previousClose")
         # priceToBook = price/book → book = price/priceToBook
     )
-    # Fallback: derive book-per-share from priceToBook ratio if bookValue missing
+
     if book is None or book <= 0:
         ptb = info.get("priceToBook")
         price = info.get("previousClose") or info.get("regularMarketPreviousClose")
@@ -144,7 +142,6 @@ def _get_fundamentals_fast_info(ticker_obj) -> tuple[float | None, float | None]
     try:
         fi = ticker_obj.fast_info
         shares = getattr(fi, "shares", None)
-        # fast_info has no book value — return shares only
         return (float(shares) if shares and shares > 0 else None, None)
     except Exception:
         return (None, None)
@@ -158,13 +155,13 @@ def _get_book_from_balance_sheet(ticker_obj) -> float | None:
             bs = ticker_obj.balance_sheet
         if bs is None or bs.empty:
             return None
-        # Stockholders equity rows vary by yfinance version
+
         for row in ["Stockholders Equity", "Total Stockholder Equity",
                     "Common Stock Equity", "Total Equity Gross Minority Interest"]:
             if row in bs.index:
                 equity = float(bs.loc[row].iloc[0])
                 if equity > 0:
-                    return equity  # total equity — divided by shares later
+                    return equity
         return None
     except Exception:
         return None
@@ -182,7 +179,7 @@ def fetch_fundamentals(tickers: list[str], diag: Diagnostics) -> pd.DataFrame:
         try:
             tk = yf.Ticker(t)
 
-            # ── Method 1: .info dict ───────────────────────────────────────────
+            # Method 1: .info dict 
             try:
                 info = tk.info
                 if info and len(info) > 5:          # non-empty response
@@ -190,19 +187,19 @@ def fetch_fundamentals(tickers: list[str], diag: Diagnostics) -> pd.DataFrame:
             except Exception:
                 info = {}
 
-            # ── Method 2: fast_info for shares (if Method 1 missed shares) ────
+            # Method 2: fast_info for shares (if Method 1 missed shares)
             if shares is None:
                 shares_fi, _ = _get_fundamentals_fast_info(tk)
                 if shares_fi:
                     shares = shares_fi
 
-            # ── Method 3: balance sheet for book equity (if still missing) ────
+            # Method 3: balance sheet for book equity (if still missing) 
             if book is None or book <= 0:
                 total_equity = _get_book_from_balance_sheet(tk)
                 if total_equity and shares and shares > 0:
-                    book = total_equity / shares   # converts total equity → per-share
+                    book = total_equity / shares  
 
-            # ── Validate ───────────────────────────────────────────────────────
+            # Validate
             if shares is None or book is None or book <= 0:
                 diag.drop(
                     t,
@@ -244,8 +241,6 @@ def fetch_risk_free_series(
     daily_rate = manual_annual_rate / TRADING_DAYS_PER_YEAR
     return pd.Series(daily_rate, index=index, name="RF")
 
-
-# ── Factor construction ───────────────────────────────────────────────────────
 def build_fama_french_factors(
     prices_df: pd.DataFrame,
     fundamentals_df: pd.DataFrame,
@@ -368,7 +363,7 @@ def build_fama_french_factors(
     return factors, aligned_returns
 
 
-# ── Regressions ───────────────────────────────────────────────────────────────
+# Regressions
 MIN_OBS_FOR_REGRESSION = 60
 
 
@@ -438,7 +433,7 @@ def _ewma_annualized_vol(returns: pd.Series, lam: float = 0.94) -> float:
     return float(np.sqrt(var * TRADING_DAYS_PER_YEAR))
 
 
-# ── Rolling exposures ─────────────────────────────────────────────────────────
+# Rolling exposures
 def calculate_rolling_exposures(
     stock_series: pd.Series, factors_df: pd.DataFrame, window: int = 60
 ) -> pd.DataFrame:
