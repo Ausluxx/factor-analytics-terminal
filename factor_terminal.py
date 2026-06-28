@@ -107,7 +107,7 @@ ACCENT = "#f87171"
 GREEN  = "#6ee7b7"
 
 
-# ── Cached wrappers (tuples for hashable cache keys) ──────────────────────────
+# Cached wrappers (tuples for hashable cache keys)
 @st.cache_data(show_spinner="Downloading historical price data...")
 def fetch_terminal_data_cached(tickers: tuple, start, end):
     local_diag = Diagnostics()
@@ -141,8 +141,6 @@ def merge_diag_payload(
 def load_universe_cached() -> list[str]:
     return load_current_nifty50_universe()
 
-
-# ── UI helpers ────────────────────────────────────────────────────────────────
 def render_metric_card(badge: str, label: str, value: str, sub: str | None = None, green: bool = False):
     vc = "metric-value green" if green else "metric-value"
     sub_html = f'<div class="metric-sub">{sub}</div>' if sub else ""
@@ -179,7 +177,7 @@ def safe_fmt(fmt: str, val, fallback: str = "—") -> str:
         return fallback
 
 
-# ── Sidebar ───────────────────────────────────────────────────────────────────
+# Sidebar 
 with st.sidebar:
     st.markdown("## Controls")
     universe_selection = st.selectbox("Universe", ["Nifty 50", "Custom Tickers"])
@@ -209,7 +207,7 @@ with st.sidebar:
 end_date   = datetime.date.today()
 start_date = end_date.replace(year=end_date.year - lookback_years)
 
-# ── Header ────────────────────────────────────────────────────────────────────
+# Header 
 st.markdown("""
     <div class="terminal-header">
         <div class="logo-badge">📈</div>
@@ -217,7 +215,7 @@ st.markdown("""
     </div>
 """, unsafe_allow_html=True)
 
-# ── Data pipeline ─────────────────────────────────────────────────────────────
+# Data pipeline
 diag = Diagnostics()
 
 # Sorted tuple → stable, hashable cache key regardless of universe order
@@ -275,7 +273,7 @@ else:
 
 sorted_matrix = regression_matrix.sort_values(by="Z_Score_Rank", ascending=False)
 
-# ── KPI cards ─────────────────────────────────────────────────────────────────
+# KPI cards
 st.markdown(f"Analysing **{len(stock_tickers)}** equities · **{start_date}** → **{end_date}**")
 
 c1, c2, c3, c4 = st.columns(4)
@@ -293,12 +291,12 @@ with c4:
 
 st.markdown("<div style='height:1.1rem'></div>", unsafe_allow_html=True)
 
-# ── Tabs ──────────────────────────────────────────────────────────────────────
+# Tabs
 tab_screener, tab_heatmap, tab_decomposition, tab_diagnostics = st.tabs(
     ["Screener", "Factor Heatmap", "Decomposition", "Diagnostics"]
 )
 
-# ── SCREENER ──────────────────────────────────────────────────────────────────
+# SCREENER
 with tab_screener:
 
     # Scatter — Risk / Return
@@ -395,11 +393,7 @@ with tab_screener:
     )
 
     display_df = sorted_matrix.copy()
-
-    # Fill any NaN before string formatting to avoid "+nan%" in the table
     display_df = display_df.fillna(0.0)
-
-    # Strip .NS from index for display
     display_df.index = display_df.index.str.replace(".NS", "", regex=False)
 
     display_df["Alpha (Ann %)"]              = display_df["Alpha (Ann %)"].map("{:+.2f}%".format)
@@ -435,7 +429,7 @@ with tab_screener:
         "Hover over scatter points above for full per-stock detail."
     )
 
-# ── HEATMAP ───────────────────────────────────────────────────────────────────
+# HEATMAP
 with tab_heatmap:
     st.markdown("<div class='panel-title'>Factor Loadings Heatmap</div>", unsafe_allow_html=True)
     st.markdown(
@@ -457,7 +451,7 @@ with tab_heatmap:
     style_plotly_dark(heatmap_fig, height=520)
     st.plotly_chart(heatmap_fig, use_container_width=True)
 
-# ── DECOMPOSITION ─────────────────────────────────────────────────────────────
+# DECOMPOSITION
 with tab_decomposition:
     col_ui, col_chart = st.columns([1, 2.2], gap="large")
     # sorted_matrix index still has .NS — keep it so .loc[] works correctly
@@ -530,7 +524,7 @@ with tab_decomposition:
                 )
                 st.plotly_chart(roll_fig, use_container_width=True)
 
-# ── DIAGNOSTICS ───────────────────────────────────────────────────────────────
+# DIAGNOSTICS
 with tab_diagnostics:
     st.markdown("<div class='panel-title'>Diagnostics</div>", unsafe_allow_html=True)
     st.caption("All dropped tickers, data gaps, and run-level warnings recorded here.")
@@ -559,7 +553,7 @@ with tab_diagnostics:
 - **EWMA volatility (λ=0.94)** is the RiskMetrics approximation; a fitted GARCH(1,1) would be statistically superior.
     """)
 
-# ── Footer ────────────────────────────────────────────────────────────────────
+# Footer
 total_possible = len(raw_data) * len(stock_tickers)
 total_gaps     = sum(diag.data_gaps.values())
 completeness   = 100.0 * (1 - total_gaps / total_possible) if total_possible > 0 else 100.0
